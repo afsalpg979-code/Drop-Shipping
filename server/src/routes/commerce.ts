@@ -206,7 +206,7 @@ router.get('/admin/forecast/inventory', authenticate, allow('admin','staff'), as
 router.get('/recommendations/ai', async (req,res) => {
   const query=typeof req.query.q==='string'?req.query.q.slice(0,300):'';
   const categoryId=typeof req.query.categoryId==='string'?req.query.categoryId:undefined;
-  const {data:products,error}=await db.from('products').select('id,name,description,price_inr,stock_quantity,category:categories(name)').eq('is_active',true).gt('stock_quantity',0).limit(100);
+  const {data:products,error}=await db.from('products').select('id,name,description,price_inr,stock_quantity,image_url,category:categories(name)').eq('is_active',true).gt('stock_quantity',0).limit(100);
   if(error)return res.status(500).json({error:'Could not load products.'});
   const candidates=(products||[]).map(p=>({id:p.id,name:p.name,description:p.description||'',category:Array.isArray(p.category)?p.category[0]?.name||'':(p.category as any)?.name||'',price_inr:Number(p.price_inr),stock_quantity:p.stock_quantity}));
   try{
