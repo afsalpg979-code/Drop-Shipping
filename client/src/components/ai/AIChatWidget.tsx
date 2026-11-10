@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type FormEvent } from 'react';
 import { Bot, MessageCircle, Send, X } from 'lucide-react';
 
 type ChatMessage = { role: 'user' | 'assistant'; content: string };
@@ -12,7 +12,7 @@ export default function AIChatWidget() {
     { role: 'assistant', content: "Hi! I'm the FALCONS STORE assistant. What are you shopping for today?" },
   ]);
 
-  async function sendMessage(event: React.FormEvent) {
+  async function sendMessage(event: FormEvent) {
     event.preventDefault();
     const value = input.trim();
     if (!value || busy) return;
