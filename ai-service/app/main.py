@@ -44,7 +44,9 @@ async def health():
 
 @app.post("/v1/chat", response_model=ChatResponse)
 async def chat(payload: ChatRequest, x_ai_service_token: str | None = Header(default=None)):
-    if settings.ai_service_token and not hmac.compare_digest(x_ai_service_token or "", settings.ai_service_token):
+    if not settings.ai_service_token:
+        raise HTTPException(status_code=503, detail="AI service token is not configured")
+    if not hmac.compare_digest(x_ai_service_token or "", settings.ai_service_token):
         raise HTTPException(status_code=401, detail="Unauthorized")
     latest = payload.messages[-1].content
     if not settings.ai_provider_api_key:
