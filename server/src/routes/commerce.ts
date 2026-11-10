@@ -122,7 +122,7 @@ router.post('/support/tickets', authenticate, async (req: UserRequest, res) => {
   return res.status(201).json({ ticket: data });
 });
 router.get('/support/tickets', authenticate, async (req: UserRequest, res) => {
-  let query = db.from('support_tickets').select('id,user_id,subject,category,priority,status,created_at,updated_at').order('created_at', { ascending: false }).limit(100);
+  let query = db.from('support_tickets').select('id,user_id,subject,message,category,priority,status,ai_summary,ai_suggested_reply,created_at,updated_at').order('created_at', { ascending: false }).limit(100);
   if (req.user!.role !== 'admin' && req.user!.role !== 'staff') query = query.eq('user_id', req.user!.id);
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: 'Could not load support tickets.' });
