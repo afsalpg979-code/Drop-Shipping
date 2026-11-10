@@ -194,10 +194,10 @@ router.get('/admin/forecast/sales', authenticate, allow('admin','staff'), async 
 router.get('/admin/forecast/inventory', authenticate, allow('admin','staff'), async (_req,res) => {
   const { data: products, error }=await db.from('products').select('id,name,stock_quantity').eq('is_active',true).limit(200);
   if(error) return res.status(500).json({error:'Could not load products.'});
-  const { data: sold }=await db.from('order_items').select('product_id,quantity,orders!inner(created_at,status)').gte('orders.created_at',new Date(Date.now()-30*86400000).toISOString()).not('orders.status','in','("cancelled","refunded")');
+  const { data: sold }=await db.from('order_items').select('product_id,quantity,orders!inner(created_at,status)').gte('orders.created_at',new Date(Date.now()-30*86400000).toISOString());
   const items=(products||[]).map(product=>{
     const daily=Array(30).fill(0);
-    for(const row of sold||[]){if(row.product_id===product.id){const order=(row as any).orders;const age=Math.floor((Date.now()-new Date(order.created_at).getTime())/86400000);if(age>=0&&age<30)daily[29-age]+=Number(row.quantity||0);}}
+    for(const row of sold||[]){if(row.product_id===product.id){const order=(row as any).orders;if(!order||['cancelled','refunded'].includes(order.status))continue;const age=Math.floor((Date.now()-new Date(order.created_at).getTime())/86400000);if(age>=0&&age<30)daily[29-age]+=Number(row.quantity||0);}}
     return {product_id:product.id,name:product.name,current_stock:product.stock_quantity,daily_sales:daily,supplier_lead_days:7};
   });
   try{const response=await fetch(`${env.AI_SERVICE_URL}/v1/forecast/inventory`,{method:'POST',headers:{'Content-Type':'application/json','x-ai-service-token':env.AI_SERVICE_TOKEN||''},body:JSON.stringify({items}),signal:AbortSignal.timeout(12000)});if(!response.ok)throw new Error();return res.json(await response.json());}
