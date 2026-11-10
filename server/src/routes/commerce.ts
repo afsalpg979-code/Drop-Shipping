@@ -103,9 +103,20 @@ router.delete('/wishlist/:productId', authenticate, async (req: UserRequest, res
 router.post('/support/tickets', authenticate, async (req: UserRequest, res) => {
   const parsed = ticketSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Please check the subject and message.' });
-  const text = (parsed.data.subject + ' ' + parsed.data.message).toLowerCase();
-  const priority = /fraud|charged twice|payment failed|urgent|not received/.test(text) ? 'high' : 'normal';
-  const { data, error } = await db.from('support_tickets').insert({ user_id: req.user!.id, ...parsed.data, priority }).select('id,subject,category,priority,status,created_at').single();
+  let category = parsed.data.category;
+  let priority = 'normal';
+  let aiSummary: string | null = null;
+  let aiSuggestedReply: string | null = null;
+  try {
+    const ai = await fetch(`${env.AI_SERVICE_URL}/v1/support/assist`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-ai-service-token': env.AI_SERVICE_TOKEN || '' }, body: JSON.stringify({ subject: parsed.data.subject, message: parsed.data.message }), signal: AbortSignal.timeout(8000) });
+    if (ai.ok) {
+      const result = await ai.json() as { category?: string; priority?: string; summary?: string; suggested_reply?: string };
+      if (['order','payment','delivery','return','product','account','general'].includes(result.category || '')) category = result.category as typeof category;
+      if (['normal','high'].includes(result.priority || '')) priority = result.priority!;
+      aiSummary = result.summary || null; aiSuggestedReply = result.suggested_reply || null;
+    }
+  } catch { /* Ticket creation must still work when AI is unavailable. */ }
+  const { data, error } = await db.from('support_tickets').insert({ user_id: req.user!.id, ...parsed.data, category, priority, ai_summary: aiSummary, ai_suggested_reply: aiSuggestedReply }).select('id,subject,category,priority,status,ai_summary,ai_suggested_reply,created_at').single();
   if (error) return res.status(500).json({ error: 'Could not create support ticket.' });
   return res.status(201).json({ ticket: data });
 });
@@ -163,6 +174,47 @@ router.patch('/admin/products/:productId/stock', authenticate, allow('admin','st
   const { error: logError } = await db.from('inventory_movements').insert({ product_id: product.id, change_quantity: change, reason: parsed.data.reason, actor_id: req.user!.id });
   if (logError) return res.status(500).json({ error: 'Stock updated but inventory history could not be recorded. Contact an administrator.' });
   return res.json({ productId: product.id, previousQuantity: product.stock_quantity, quantity: parsed.data.quantity, change });
+});
+
+
+router.get('/admin/forecast/sales', authenticate, allow('admin','staff'), async (_req, res) => {
+  const since = new Date(Date.now() - 90 * 86400000).toISOString();
+  const { data, error } = await db.from('orders').select('created_at,grand_total,status').gte('created_at', since).not('status','in','("cancelled","refunded")').order('created_at');
+  if (error) return res.status(500).json({ error: 'Could not load sales history.' });
+  const daily = new Map<string, { revenue: number; orders: number }>();
+  for (let i=89;i>=0;i--) { const d=new Date(); d.setUTCHours(0,0,0,0); d.setUTCDate(d.getUTCDate()-i); daily.set(d.toISOString().slice(0,10),{revenue:0,orders:0}); }
+  for (const order of data || []) { const key=order.created_at.slice(0,10); const row=daily.get(key); if(row){row.revenue+=Number(order.grand_total||0);row.orders+=1;} }
+  try {
+    const response=await fetch(`${env.AI_SERVICE_URL}/v1/forecast/sales`,{method:'POST',headers:{'Content-Type':'application/json','x-ai-service-token':env.AI_SERVICE_TOKEN||''},body:JSON.stringify({history:[...daily.entries()].map(([date,v])=>({date,revenue:v.revenue,orders:v.orders})),horizon_days:30}),signal:AbortSignal.timeout(12000)});
+    if(!response.ok) throw new Error('AI forecast unavailable');
+    return res.json(await response.json());
+  } catch { return res.status(503).json({error:'Sales forecasting service is unavailable.'}); }
+});
+router.get('/admin/forecast/inventory', authenticate, allow('admin','staff'), async (_req,res) => {
+  const { data: products, error }=await db.from('products').select('id,name,stock_quantity').eq('is_active',true).limit(200);
+  if(error) return res.status(500).json({error:'Could not load products.'});
+  const { data: sold }=await db.from('order_items').select('product_id,quantity,orders!inner(created_at,status)').gte('orders.created_at',new Date(Date.now()-30*86400000).toISOString()).not('orders.status','in','("cancelled","refunded")');
+  const items=(products||[]).map(product=>{
+    const daily=Array(30).fill(0);
+    for(const row of sold||[]){if(row.product_id===product.id){const order=(row as any).orders;const age=Math.floor((Date.now()-new Date(order.created_at).getTime())/86400000);if(age>=0&&age<30)daily[29-age]+=Number(row.quantity||0);}}
+    return {product_id:product.id,name:product.name,current_stock:product.stock_quantity,daily_sales:daily,supplier_lead_days:7};
+  });
+  try{const response=await fetch(`${env.AI_SERVICE_URL}/v1/forecast/inventory`,{method:'POST',headers:{'Content-Type':'application/json','x-ai-service-token':env.AI_SERVICE_TOKEN||''},body:JSON.stringify({items}),signal:AbortSignal.timeout(12000)});if(!response.ok)throw new Error();return res.json(await response.json());}
+  catch{return res.status(503).json({error:'Inventory forecasting service is unavailable.'});}
+});
+router.get('/recommendations/ai', async (req,res) => {
+  const query=typeof req.query.q==='string'?req.query.q.slice(0,300):'';
+  const categoryId=typeof req.query.categoryId==='string'?req.query.categoryId:undefined;
+  const {data:products,error}=await db.from('products').select('id,name,description,price_inr,stock_quantity,category:categories(name)').eq('is_active',true).gt('stock_quantity',0).limit(100);
+  if(error)return res.status(500).json({error:'Could not load products.'});
+  const candidates=(products||[]).map(p=>({id:p.id,name:p.name,description:p.description||'',category:Array.isArray(p.category)?p.category[0]?.name||'':(p.category as any)?.name||'',price_inr:Number(p.price_inr),stock_quantity:p.stock_quantity}));
+  try{
+    const response=await fetch(`${env.AI_SERVICE_URL}/v1/recommendations/rank`,{method:'POST',headers:{'Content-Type':'application/json','x-ai-service-token':env.AI_SERVICE_TOKEN||''},body:JSON.stringify({query,preferred_categories:[],products:candidates}),signal:AbortSignal.timeout(8000)});
+    if(!response.ok)throw new Error();
+    const result=await response.json() as {ranked_product_ids:string[]};
+    const byId=new Map((products||[]).map(p=>[p.id,p]));
+    return res.json({items:(result.ranked_product_ids||[]).map(id=>byId.get(id)).filter(Boolean),strategy:'ai-content-ranking'});
+  }catch{return res.json({items:(products||[]).slice(0,8),strategy:'fallback-popular-in-stock'});}
 });
 
 export default router;
