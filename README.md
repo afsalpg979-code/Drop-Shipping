@@ -36,3 +36,14 @@ The assistant does not have direct database/payment access and must not claim it
 - Configure production SMTP, HTTPS, backups, logging, rate limits and role-based access before launch.
 
 See [Python AI service setup](ai-service/README.md) and [customer authentication guide](docs/user-guide/customer-authentication.md).
+
+## Commerce and AI modules
+- Persistent authenticated cart and wishlist endpoints backed by Supabase.
+- Customer support ticket creation with Python triage, priority/category suggestions and human-reviewed response drafts.
+- Admin operations for product drafts/publishing, orders, customers, suppliers, stock adjustments and support tickets.
+- Python sales trend forecasts, inventory reorder estimates and content-based product ranking.
+- Storefront search is connected to the AI ranking endpoint.
+
+Apply Supabase migrations `0001` through `0005` in order. See [commerce and AI module documentation](docs/architecture/commerce-ai-modules.md) and [initial admin setup](docs/admin-guide/initial-admin-setup.md).
+
+**Current scope:** Cart and wishlist are database-backed. Checkout is not enabled; payment gateway integration and verified webhooks must be completed before accepting payments. Forecasting uses simple statistical baselines and should be validated against historical data before operational use. AI support drafts require human review.
