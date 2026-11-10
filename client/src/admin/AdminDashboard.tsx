@@ -8,7 +8,7 @@ type Product={id:string;name:string;slug:string;sku:string|null;price_inr:number
 type Order={id:string;order_number:string;status:string;payment_status:string;grand_total:number;tracking_number:string|null};
 type Customer={id:string;full_name:string|null;phone:string|null;account_status:string};
 type Supplier={id:string;name:string;email:string|null;phone:string|null};
-type Ticket={id:string;subject:string;priority:string;status:string;category:string};
+type Ticket={id:string;subject:string;message:string;priority:string;status:string;category:string;ai_suggested_reply:string|null};
 export default function AdminDashboard(){
  const [data,setData]=useState<Overview|null>(null);const [sales,setSales]=useState<Forecast|null>(null);const [inventory,setInventory]=useState<Inventory|null>(null);
  const [products,setProducts]=useState<Product[]>([]);const [orders,setOrders]=useState<Order[]>([]);const [customers,setCustomers]=useState<Customer[]>([]);const [suppliers,setSuppliers]=useState<Supplier[]>([]);const [tickets,setTickets]=useState<Ticket[]>([]);
@@ -29,6 +29,6 @@ export default function AdminDashboard(){
  {tab==='orders'&&orders.map(o=><div className="commerce-row" key={o.id}><div><b>{o.order_number}</b><small>{o.payment_status} · {o.tracking_number||'No tracking number'}</small></div><b>₹{Number(o.grand_total).toLocaleString('en-IN')}</b><select value={o.status} onChange={e=>void orderStatus(o.id,e.target.value)}>{['pending','confirmed','processing','shipped','delivered','cancelled','refunded'].map(s=><option key={s}>{s}</option>)}</select></div>)}
  {tab==='customers'&&customers.map(c=><div className="commerce-row" key={c.id}><div><b>{c.full_name||'Customer'}</b><small>{c.phone||c.id}</small></div><span>{c.account_status}</span><button className="remove-button" onClick={()=>void customerStatus(c.id,c.account_status==='active'?'suspended':'active')}>{c.account_status==='active'?'Suspend':'Reactivate'}</button></div>)}
  {tab==='suppliers'&&<><form className="admin-inline-form" onSubmit={createSupplier}><h2>Add supplier</h2><input placeholder="Supplier name" value={supplierName} onChange={e=>setSupplierName(e.target.value)} required/><button className="dark-button">Add supplier</button></form>{suppliers.map(s=><div className="commerce-row" key={s.id}><b>{s.name}</b><span>{s.email||'Email not added'}</span><span>{s.phone||'Phone not added'}</span></div>)}</>}
- {tab==='support'&&tickets.map(t=><div className="commerce-row" key={t.id}><div><b>{t.subject}</b><small>{t.category} · {t.priority}</small></div><select value={t.status} onChange={e=>void ticketStatus(t.id,e.target.value)}>{['open','in_progress','waiting_customer','resolved','closed'].map(s=><option key={s}>{s}</option>)}</select></div>)}
+ {tab==='support'&&tickets.map(t=><div className="commerce-row" key={t.id}><div><b>{t.subject}</b><small>{t.category} · {t.priority}</small>{t.ai_suggested_reply&&<small>AI suggested reply: {t.ai_suggested_reply}</small>}</div><select value={t.status} onChange={e=>void ticketStatus(t.id,e.target.value)}>{['open','in_progress','waiting_customer','resolved','closed'].map(s=><option key={s}>{s}</option>)}</select></div>)}
  </main>;
 }
