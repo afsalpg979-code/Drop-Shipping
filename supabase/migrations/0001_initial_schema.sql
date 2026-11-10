@@ -1,0 +1,31 @@
+-- FALCONS STORE initial schema. Review before applying.
+create extension if not exists pgcrypto;
+create type public.app_role as enum ('customer','staff','admin','supplier');
+create type public.order_status as enum ('pending','confirmed','processing','shipped','delivered','cancelled','refunded');
+create table public.profiles (id uuid primary key references auth.users(id) on delete cascade, full_name text, phone text, role public.app_role not null default 'customer', created_at timestamptz not null default now());
+create table public.categories (id uuid primary key default gen_random_uuid(), name text not null, slug text unique not null, is_active boolean not null default true);
+create table public.products (id uuid primary key default gen_random_uuid(), category_id uuid references public.categories(id), name text not null, slug text unique not null, description text, price_inr numeric(12,2) not null check(price_inr>=0), sku text unique, stock_quantity integer not null default 0 check(stock_quantity>=0), is_active boolean not null default false, created_at timestamptz not null default now());
+create table public.addresses (id uuid primary key default gen_random_uuid(), user_id uuid not null references auth.users(id) on delete cascade, recipient text not null, phone text not null, line1 text not null, city text not null, state text not null, postal_code text not null, country_code text not null default 'IN');
+create table public.orders (id uuid primary key default gen_random_uuid(), order_number text unique not null, user_id uuid not null references auth.users(id), status public.order_status not null default 'pending', currency char(3) not null default 'INR', subtotal numeric(12,2) not null check(subtotal>=0), shipping_total numeric(12,2) not null default 0, discount_total numeric(12,2) not null default 0, grand_total numeric(12,2) not null check(grand_total>=0), shipping_address jsonb not null, tracking_number text, created_at timestamptz not null default now());
+create table public.order_items (id uuid primary key default gen_random_uuid(), order_id uuid not null references public.orders(id) on delete cascade, product_id uuid references public.products(id), product_name text not null, quantity integer not null check(quantity>0), unit_price numeric(12,2) not null check(unit_price>=0), supplier_cost numeric(12,2));
+create table public.wishlist_items (user_id uuid not null references auth.users(id) on delete cascade, product_id uuid not null references public.products(id) on delete cascade, primary key(user_id,product_id));
+create table public.suppliers (id uuid primary key default gen_random_uuid(), name text not null, email text, phone text, rating numeric(2,1) check(rating between 0 and 5));
+create table public.product_suppliers (product_id uuid references public.products(id) on delete cascade, supplier_id uuid references public.suppliers(id) on delete cascade, purchase_cost numeric(12,2) not null check(purchase_cost>=0), primary key(product_id,supplier_id));
+create table public.coupons (id uuid primary key default gen_random_uuid(), code text unique not null, discount_type text not null check(discount_type in ('percent','fixed')), discount_value numeric(12,2) not null check(discount_value>0), starts_at timestamptz, ends_at timestamptz, is_active boolean not null default true);
+create table public.audit_logs (id bigint generated always as identity primary key, actor_id uuid references auth.users(id), action text not null, entity_type text not null, entity_id text, metadata jsonb not null default '{}', created_at timestamptz not null default now());
+create or replace function public.current_app_role() returns public.app_role language sql stable security definer set search_path=public as $$ select role from public.profiles where id=auth.uid() $$;
+-- Enable RLS on all user/business tables.
+do $$ declare t text; begin foreach t in array array['profiles','categories','products','addresses','orders','order_items','wishlist_items','suppliers','product_suppliers','coupons','audit_logs'] loop execute format('alter table public.%I enable row level security',t); end loop; end $$;
+create policy "profiles read self or staff" on public.profiles for select using (id=auth.uid() or public.current_app_role() in ('admin','staff'));
+create policy "profiles update self" on public.profiles for update using (id=auth.uid()) with check (id=auth.uid() and role=(select p.role from public.profiles p where p.id=auth.uid()));
+create policy "public read active categories" on public.categories for select using (is_active or public.current_app_role() in ('admin','staff'));
+create policy "public read active products" on public.products for select using (is_active or public.current_app_role() in ('admin','staff'));
+create policy "owners manage addresses" on public.addresses for all using (user_id=auth.uid() or public.current_app_role() in ('admin','staff')) with check (user_id=auth.uid() or public.current_app_role() in ('admin','staff'));
+create policy "customers read own orders" on public.orders for select using (user_id=auth.uid() or public.current_app_role() in ('admin','staff'));
+create policy "customers read own order items" on public.order_items for select using (exists(select 1 from public.orders o where o.id=order_id and o.user_id=auth.uid()) or public.current_app_role() in ('admin','staff'));
+create policy "owners manage wishlist" on public.wishlist_items for all using (user_id=auth.uid()) with check (user_id=auth.uid());
+create policy "staff manage suppliers" on public.suppliers for all using (public.current_app_role() in ('admin','staff')) with check (public.current_app_role() in ('admin','staff'));
+create policy "staff manage product suppliers" on public.product_suppliers for all using (public.current_app_role() in ('admin','staff')) with check (public.current_app_role() in ('admin','staff'));
+create policy "public read active coupons" on public.coupons for select using (is_active and (starts_at is null or starts_at<=now()) and (ends_at is null or ends_at>=now()));
+create policy "admins read audit logs" on public.audit_logs for select using (public.current_app_role()='admin');
+-- No client write policies for orders, payments, refunds, stock or audit logs. Privileged operations belong in trusted server/Edge Functions.
