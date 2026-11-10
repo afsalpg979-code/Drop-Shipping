@@ -1,5 +1,5 @@
 import express from 'express'; import cors from 'cors'; import helmet from 'helmet'; import { env } from './config/env.js';
-import { z } from 'zod'; const app=express(); app.disable('x-powered-by'); app.use(helmet()); app.use(cors({origin:env.CORS_ORIGIN.split(',').map(x=>x.trim()),credentials:true})); app.use(express.json({limit:'1mb'})); const chatSchema = z.object({ messages: z.array(z.object({ role: z.enum(['user','assistant']), content: z.string().trim().min(1).max(2000) })).min(1).max(12) });
+import { z } from 'zod'; import commerceRouter from './routes/commerce.js'; const app=express(); app.disable('x-powered-by'); app.use(helmet()); app.use(cors({origin:env.CORS_ORIGIN.split(',').map(x=>x.trim()),credentials:true})); app.use(express.json({limit:'1mb'})); const chatSchema = z.object({ messages: z.array(z.object({ role: z.enum(['user','assistant']), content: z.string().trim().min(1).max(2000) })).min(1).max(12) });
 const aiRate = new Map<string, { count: number; reset: number }>();
 app.post('/api/ai/chat', async (req,res) => {
   const ip = req.ip || req.socket.remoteAddress || 'unknown';
@@ -20,4 +20,4 @@ app.post('/api/ai/chat', async (req,res) => {
     return res.json({ reply: data.reply, mode: data.mode });
   } catch { return res.status(503).json({ error: 'Assistant service is offline. Please try again later.' }); }
 });
-app.get('/api/health',(_req,res)=>res.json({ok:true,service:'falcons-store-api',environment:env.NODE_ENV})); app.use((_req,res)=>res.status(404).json({error:'Not found'})); export default app;
+app.use('/api', commerceRouter); app.get('/api/health',(_req,res)=>res.json({ok:true,service:'falcons-store-api',environment:env.NODE_ENV})); app.use((_req,res)=>res.status(404).json({error:'Not found'})); export default app;
