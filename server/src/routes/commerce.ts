@@ -13,7 +13,8 @@ async function authenticate(req: UserRequest, res: Response, next: NextFunction)
   if (!token) return res.status(401).json({ error: 'Sign in is required.' });
   const { data, error } = await db.auth.getUser(token);
   if (error || !data.user) return res.status(401).json({ error: 'Your session is invalid or expired.' });
-  const { data: profile } = await db.from('profiles').select('role').eq('id', data.user.id).maybeSingle();
+  const { data: profile } = await db.from('profiles').select('role,account_status').eq('id', data.user.id).maybeSingle();
+  if (profile?.account_status === 'suspended') return res.status(403).json({ error: 'This account is suspended. Please contact store support.' });
   req.user = { id: data.user.id, role: (profile?.role || 'customer') as Role, email: data.user.email };
   next();
 }
