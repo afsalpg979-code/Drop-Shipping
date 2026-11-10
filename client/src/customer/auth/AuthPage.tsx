@@ -4,10 +4,10 @@ import { ArrowLeft, Eye, EyeOff, ShieldCheck } from 'lucide-react';
 import { supabase, supabaseConfigured } from '../../services/supabase/client';
 import './auth.css';
 
-type Mode = 'login' | 'signup' | 'forgot';
+type Mode = 'login' | 'signup' | 'forgot' | 'reset';
 
 export default function AuthPage() {
-  const [mode, setMode] = useState<Mode>('login');
+  const [mode, setMode] = useState<Mode>(window.location.pathname === '/auth/reset-password' ? 'reset' : 'login');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
@@ -29,7 +29,7 @@ export default function AuthPage() {
     if (mode !== 'forgot' && password.length < 8) {
       setError('Use a password with at least 8 characters.'); return;
     }
-    if (mode === 'signup' && password !== confirm) {
+    if ((mode === 'signup' || mode === 'reset') && password !== confirm) {
       setError('Your passwords do not match.'); return;
     }
     setBusy(true);
@@ -46,6 +46,11 @@ export default function AuthPage() {
         const { error } = await supabase.auth.signInWithPassword({ email: email.trim().toLowerCase(), password });
         if (error) throw error;
         navigate('/account');
+      } else if (mode === 'reset') {
+        const { error } = await supabase.auth.updateUser({ password });
+        if (error) throw error;
+        setMessage('Your password has been updated. You can now sign in.');
+        setMode('login'); setPassword(''); setConfirm('');
       } else {
         const { error } = await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase(), {
           redirectTo: window.location.origin + '/auth/reset-password',
@@ -58,7 +63,7 @@ export default function AuthPage() {
     } finally { setBusy(false); }
   }
 
-  const title = mode === 'signup' ? 'Create your account' : mode === 'forgot' ? 'Reset your password' : 'Welcome back';
+  const title = mode === 'signup' ? 'Create your account' : (mode === 'forgot' || mode === 'reset') ? (mode === 'reset' ? 'Choose a new password' : 'Reset your password') : 'Welcome back';
   return <main className="auth-page">
     <div className="auth-visual">
       <Link to="/" className="auth-brand">FALCONS<span>STORE</span></Link>
@@ -71,7 +76,7 @@ export default function AuthPage() {
         <div className="auth-mark"><ShieldCheck size={21}/></div>
         <span className="eyebrow">YOUR ACCOUNT</span>
         <h2>{title}</h2>
-        <p className="auth-subtitle">{mode === 'signup' ? 'Join us and keep everything in one place.' : mode === 'forgot' ? 'Enter your account email and we’ll send a secure reset link.' : 'Enter your details to continue shopping.'}</p>
+        <p className="auth-subtitle">{mode === 'signup' ? 'Join us and keep everything in one place.' : mode === 'forgot' ? 'Enter your account email and we’ll send a secure reset link.' : mode === 'reset' ? 'Choose a new password for your account.' : 'Enter your details to continue shopping.'}</p>
         <form onSubmit={submit}>
           {mode === 'signup' && <>
             <label>Full name<input autoComplete="name" value={name} onChange={e=>setName(e.target.value)} placeholder="Your name" required maxLength={80}/></label>
@@ -79,13 +84,13 @@ export default function AuthPage() {
           </>}
           <label>Email address<input type="email" autoComplete="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" required maxLength={254}/></label>
           {mode !== 'forgot' && <label>Password<div className="password-field"><input type={showPassword?'text':'password'} autoComplete={mode==='signup'?'new-password':'current-password'} value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 8 characters" required minLength={8}/><button type="button" onClick={()=>setShowPassword(!showPassword)} aria-label={showPassword?'Hide password':'Show password'}>{showPassword?<EyeOff size={17}/>:<Eye size={17}/>}</button></div></label>}
-          {mode === 'signup' && <label>Confirm password<input type="password" autoComplete="new-password" value={confirm} onChange={e=>setConfirm(e.target.value)} placeholder="Enter password again" required minLength={8}/></label>}
+          {(mode === 'signup' || mode === 'reset') && <label>Confirm password<input type="password" autoComplete="new-password" value={confirm} onChange={e=>setConfirm(e.target.value)} placeholder="Enter password again" required minLength={8}/></label>}
           {mode === 'login' && <button type="button" className="text-action forgot-link" onClick={()=>{setMode('forgot');setError('');setMessage('');}}>Forgot password?</button>}
           {error && <div className="auth-alert error" role="alert">{error}</div>}
           {message && <div className="auth-alert success" role="status">{message}</div>}
           <button className="auth-submit" disabled={busy}>{busy?'Please wait…':mode==='signup'?'Create account':mode==='forgot'?'Send reset link':'Sign in'}</button>
         </form>
-        <div className="auth-switch">{mode==='forgot' ? <>Remembered it? <button className="text-action" onClick={()=>{setMode('login');setMessage('');setError('');}}>Back to sign in</button></> : mode==='login' ? <>New to FALCONS? <button className="text-action" onClick={()=>{setMode('signup');setMessage('');setError('');}}>Create an account</button></> : <>Already have an account? <button className="text-action" onClick={()=>{setMode('login');setMessage('');setError('');}}>Sign in</button></>}</div>
+        <div className="auth-switch">{mode==='forgot' || mode==='reset' ? <>Remembered it? <button className="text-action" onClick={()=>{setMode('login');setMessage('');setError('');}}>Back to sign in</button></> : mode==='login' ? <>New to FALCONS? <button className="text-action" onClick={()=>{setMode('signup');setMessage('');setError('');}}>Create an account</button></> : <>Already have an account? <button className="text-action" onClick={()=>{setMode('login');setMessage('');setError('');}}>Sign in</button></>}</div>
         <p className="auth-legal">By continuing, you agree to our <Link to="/policies/terms">Terms</Link> and <Link to="/policies/privacy">Privacy Policy</Link>.</p>
       </div>
     </section>
