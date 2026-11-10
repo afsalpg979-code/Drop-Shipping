@@ -11,3 +11,13 @@ jobs:
       - run: npm install
       - run: npm run typecheck
       - run: npm run build
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Python AI dependencies
+        run: pip install -r requirements.txt
+        working-directory: ai-service
+      - name: Run Python AI tests
+        run: python -m unittest discover -s tests -v
+        working-directory: ai-service
