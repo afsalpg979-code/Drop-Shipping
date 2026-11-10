@@ -1,0 +1,168 @@
+import { Router, type Request, type Response, type NextFunction } from 'express';
+import { createClient } from '@supabase/supabase-js';
+import { z } from 'zod';
+import { env } from '../config/env.js';
+
+const router = Router();
+const db = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+type Role = 'customer' | 'staff' | 'admin' | 'supplier';
+type UserRequest = Request & { user?: { id: string; role: Role; email?: string } };
+
+async function authenticate(req: UserRequest, res: Response, next: NextFunction) {
+  const token = req.headers.authorization?.match(/^Bearer (.+)$/i)?.[1];
+  if (!token) return res.status(401).json({ error: 'Sign in is required.' });
+  const { data, error } = await db.auth.getUser(token);
+  if (error || !data.user) return res.status(401).json({ error: 'Your session is invalid or expired.' });
+  const { data: profile } = await db.from('profiles').select('role').eq('id', data.user.id).maybeSingle();
+  req.user = { id: data.user.id, role: (profile?.role || 'customer') as Role, email: data.user.email };
+  next();
+}
+function allow(...roles: Role[]) {
+  return (req: UserRequest, res: Response, next: NextFunction) => {
+    if (!req.user || !roles.includes(req.user.role)) return res.status(403).json({ error: 'You do not have permission to perform this action.' });
+    next();
+  };
+}
+const addItemSchema = z.object({ productId: z.string().uuid(), quantity: z.number().int().min(1).max(99).default(1) });
+const quantitySchema = z.object({ quantity: z.number().int().min(1).max(99) });
+const ticketSchema = z.object({ subject: z.string().trim().min(4).max(160), message: z.string().trim().min(10).max(5000), category: z.enum(['order','payment','delivery','return','product','account','general']).default('general') });
+
+async function getOrCreateCart(userId: string) {
+  const existing = await db.from('carts').select('id').eq('user_id', userId).maybeSingle();
+  if (existing.data?.id) return existing.data.id as string;
+  const created = await db.from('carts').insert({ user_id: userId }).select('id').single();
+  if (created.error) throw created.error;
+  return created.data.id as string;
+}
+
+router.get('/cart', authenticate, async (req: UserRequest, res) => {
+  try {
+    const cartId = await getOrCreateCart(req.user!.id);
+    const { data, error } = await db.from('cart_items').select('id,quantity,product:products(id,name,slug,price_inr,stock_quantity,is_active,category_id)').eq('cart_id', cartId);
+    if (error) throw error;
+    return res.json({ items: data || [] });
+  } catch { return res.status(500).json({ error: 'Could not load your cart.' }); }
+});
+router.post('/cart/items', authenticate, async (req: UserRequest, res) => {
+  const parsed = addItemSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid product or quantity.' });
+  const { data: product } = await db.from('products').select('id,stock_quantity,is_active').eq('id', parsed.data.productId).maybeSingle();
+  if (!product?.is_active) return res.status(404).json({ error: 'Product is unavailable.' });
+  if (product.stock_quantity < parsed.data.quantity) return res.status(409).json({ error: 'Not enough stock is available.' });
+  try {
+    const cartId = await getOrCreateCart(req.user!.id);
+    const { data: current } = await db.from('cart_items').select('id,quantity').eq('cart_id', cartId).eq('product_id', parsed.data.productId).maybeSingle();
+    const nextQuantity = (current?.quantity || 0) + parsed.data.quantity;
+    if (nextQuantity > product.stock_quantity || nextQuantity > 99) return res.status(409).json({ error: 'Requested quantity exceeds available stock.' });
+    const result = current
+      ? await db.from('cart_items').update({ quantity: nextQuantity }).eq('id', current.id).select('id,quantity').single()
+      : await db.from('cart_items').insert({ cart_id: cartId, product_id: parsed.data.productId, quantity: parsed.data.quantity }).select('id,quantity').single();
+    if (result.error) throw result.error;
+    return res.status(201).json({ item: result.data });
+  } catch { return res.status(500).json({ error: 'Could not add this item to your cart.' }); }
+});
+router.patch('/cart/items/:itemId', authenticate, async (req: UserRequest, res) => {
+  const parsed = quantitySchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Quantity must be between 1 and 99.' });
+  const cartId = await getOrCreateCart(req.user!.id);
+  const { data: item } = await db.from('cart_items').select('id,product_id,product:products(stock_quantity,is_active)').eq('id', req.params.itemId).eq('cart_id', cartId).maybeSingle();
+  if (!item) return res.status(404).json({ error: 'Cart item not found.' });
+  const product = Array.isArray(item.product) ? item.product[0] : item.product;
+  if (!product?.is_active || parsed.data.quantity > product.stock_quantity) return res.status(409).json({ error: 'Requested quantity is unavailable.' });
+  const { data, error } = await db.from('cart_items').update({ quantity: parsed.data.quantity }).eq('id', item.id).select('id,quantity').single();
+  if (error) return res.status(500).json({ error: 'Could not update cart item.' });
+  return res.json({ item: data });
+});
+router.delete('/cart/items/:itemId', authenticate, async (req: UserRequest, res) => {
+  const cartId = await getOrCreateCart(req.user!.id);
+  const { error } = await db.from('cart_items').delete().eq('id', req.params.itemId).eq('cart_id', cartId);
+  if (error) return res.status(500).json({ error: 'Could not remove cart item.' });
+  return res.status(204).send();
+});
+
+router.get('/wishlist', authenticate, async (req: UserRequest, res) => {
+  const { data, error } = await db.from('wishlist_items').select('product_id,product:products(id,name,slug,price_inr,stock_quantity,is_active)').eq('user_id', req.user!.id);
+  if (error) return res.status(500).json({ error: 'Could not load wishlist.' });
+  return res.json({ items: data || [] });
+});
+router.post('/wishlist/:productId', authenticate, async (req: UserRequest, res) => {
+  const id = z.string().uuid().safeParse(req.params.productId);
+  if (!id.success) return res.status(400).json({ error: 'Invalid product.' });
+  const { data: product } = await db.from('products').select('id,is_active').eq('id', id.data).maybeSingle();
+  if (!product?.is_active) return res.status(404).json({ error: 'Product unavailable.' });
+  const { error } = await db.from('wishlist_items').upsert({ user_id: req.user!.id, product_id: id.data }, { onConflict: 'user_id,product_id', ignoreDuplicates: true });
+  if (error) return res.status(500).json({ error: 'Could not save wishlist item.' });
+  return res.status(201).json({ saved: true });
+});
+router.delete('/wishlist/:productId', authenticate, async (req: UserRequest, res) => {
+  const { error } = await db.from('wishlist_items').delete().eq('user_id', req.user!.id).eq('product_id', req.params.productId);
+  if (error) return res.status(500).json({ error: 'Could not remove wishlist item.' });
+  return res.status(204).send();
+});
+
+router.post('/support/tickets', authenticate, async (req: UserRequest, res) => {
+  const parsed = ticketSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Please check the subject and message.' });
+  const text = (parsed.data.subject + ' ' + parsed.data.message).toLowerCase();
+  const priority = /fraud|charged twice|payment failed|urgent|not received/.test(text) ? 'high' : 'normal';
+  const { data, error } = await db.from('support_tickets').insert({ user_id: req.user!.id, ...parsed.data, priority }).select('id,subject,category,priority,status,created_at').single();
+  if (error) return res.status(500).json({ error: 'Could not create support ticket.' });
+  return res.status(201).json({ ticket: data });
+});
+router.get('/support/tickets', authenticate, async (req: UserRequest, res) => {
+  let query = db.from('support_tickets').select('id,user_id,subject,category,priority,status,created_at,updated_at').order('created_at', { ascending: false }).limit(100);
+  if (req.user!.role !== 'admin' && req.user!.role !== 'staff') query = query.eq('user_id', req.user!.id);
+  const { data, error } = await query;
+  if (error) return res.status(500).json({ error: 'Could not load support tickets.' });
+  return res.json({ tickets: data || [] });
+});
+router.patch('/support/tickets/:ticketId', authenticate, allow('admin','staff'), async (req: UserRequest, res) => {
+  const parsed = z.object({ status: z.enum(['open','in_progress','waiting_customer','resolved','closed']).optional(), priority: z.enum(['low','normal','high','urgent']).optional(), assignedTo: z.string().uuid().nullable().optional() }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Invalid ticket update.' });
+  const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (parsed.data.status) patch.status = parsed.data.status;
+  if (parsed.data.priority) patch.priority = parsed.data.priority;
+  if (parsed.data.assignedTo !== undefined) patch.assigned_to = parsed.data.assignedTo;
+  const { data, error } = await db.from('support_tickets').update(patch).eq('id', req.params.ticketId).select('id,status,priority,assigned_to').single();
+  if (error) return res.status(500).json({ error: 'Could not update ticket.' });
+  return res.json({ ticket: data });
+});
+
+router.get('/recommendations', async (req, res) => {
+  const categoryId = typeof req.query.categoryId === 'string' ? req.query.categoryId : undefined;
+  let query = db.from('products').select('id,name,slug,description,price_inr,stock_quantity,category_id').eq('is_active', true).gt('stock_quantity', 0).limit(8);
+  if (categoryId) query = query.eq('category_id', categoryId);
+  const { data, error } = await query.order('created_at', { ascending: false });
+  if (error) return res.status(500).json({ error: 'Could not load recommendations.' });
+  return res.json({ items: data || [], strategy: categoryId ? 'category-match' : 'in-stock-recent' });
+});
+
+router.get('/admin/overview', authenticate, allow('admin','staff'), async (_req, res) => {
+  const [products, orders, customers, tickets, lowStock] = await Promise.all([
+    db.from('products').select('id', { count: 'exact', head: true }),
+    db.from('orders').select('id,grand_total,status,created_at'),
+    db.from('profiles').select('id', { count: 'exact', head: true }).eq('role','customer'),
+    db.from('support_tickets').select('id', { count: 'exact', head: true }).in('status',['open','in_progress']),
+    db.from('products').select('id,name,sku,stock_quantity').eq('is_active',true).lte('stock_quantity',5).order('stock_quantity').limit(10)
+  ]);
+  if (orders.error || products.error || customers.error || tickets.error || lowStock.error) return res.status(500).json({ error: 'Could not load admin overview.' });
+  const allOrders = orders.data || [];
+  const revenue = allOrders.filter(o => !['cancelled','refunded'].includes(o.status)).reduce((sum,o) => sum + Number(o.grand_total || 0),0);
+  const today = new Date(); today.setHours(0,0,0,0);
+  const todayOrders = allOrders.filter(o => new Date(o.created_at) >= today);
+  return res.json({ metrics: { products: products.count || 0, customers: customers.count || 0, orders: allOrders.length, revenueInr: revenue, todayOrders: todayOrders.length, openTickets: tickets.count || 0 }, lowStock: lowStock.data || [], recentOrders: allOrders.slice(-8).reverse() });
+});
+router.patch('/admin/products/:productId/stock', authenticate, allow('admin','staff'), async (req: UserRequest, res) => {
+  const parsed = z.object({ quantity: z.number().int().min(0).max(100000), reason: z.string().trim().min(3).max(120) }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Enter a valid stock quantity and reason.' });
+  const { data: product } = await db.from('products').select('id,stock_quantity').eq('id',req.params.productId).maybeSingle();
+  if (!product) return res.status(404).json({ error: 'Product not found.' });
+  const change = parsed.data.quantity - product.stock_quantity;
+  const { error: updateError } = await db.from('products').update({ stock_quantity: parsed.data.quantity }).eq('id',product.id);
+  if (updateError) return res.status(500).json({ error: 'Could not update inventory.' });
+  const { error: logError } = await db.from('inventory_movements').insert({ product_id: product.id, change_quantity: change, reason: parsed.data.reason, actor_id: req.user!.id });
+  if (logError) return res.status(500).json({ error: 'Stock updated but inventory history could not be recorded. Contact an administrator.' });
+  return res.json({ productId: product.id, previousQuantity: product.stock_quantity, quantity: parsed.data.quantity, change });
+});
+
+export default router;
