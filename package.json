@@ -1,1 +1,22 @@
-{"name":"falcons-store","version":"0.1.0","private":true,"workspaces":["client","server"],"scripts":{"dev":"concurrently -k \"npm run dev -w client\" \"npm run dev -w server\"","build":"npm run build -w client && npm run build -w server","typecheck":"npm run typecheck -w client && npm run typecheck -w server","test":"npm run test -w server","lint":"npm run lint -w client && npm run lint -w server"},"devDependencies":{"concurrently":"^9.1.2","typescript":"^5.8.3"}}
+{
+  "name": "falcons-store",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "scripts": {
+    "dev": "concurrently -k \"npm run dev -w client\" \"npm run dev -w server\"",
+    "build": "npm run build -w client && npm run build -w server",
+    "typecheck": "npm run typecheck -w client && npm run typecheck -w server",
+    "test": "npm run test -w server",
+    "lint": "npm run lint -w client && npm run lint -w server",
+    "dev:ai": "cd ai-service && python -m uvicorn app.main:app --reload --port 8000",
+    "dev:all": "concurrently -k \"npm run dev -w client\" \"npm run dev -w server\" \"npm run dev:ai\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.8.3"
+  }
+}
