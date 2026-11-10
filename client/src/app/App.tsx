@@ -15,6 +15,7 @@ type StoreProduct={id:string;name:string;category?:{name?:string}|null;price_inr
 function Storefront(){
  const [products,setProducts]=useState<StoreProduct[]>([]);
  const [notice,setNotice]=useState('');
+ const [searchTerm,setSearchTerm]=useState('');
  useEffect(()=>{void api<{items:StoreProduct[]}>('/recommendations/ai').then(r=>setProducts(r.items)).catch(()=>setProducts([]));},[]);
  async function runSearch(){try{const r=await api<{items:StoreProduct[]}>('/recommendations/ai?q='+encodeURIComponent(searchTerm));setProducts(r.items);setNotice(r.items.length?'AI matched products for your search.':'No matching products found.');}catch(e){setNotice(e instanceof Error?e.message:'Search is temporarily unavailable.');}}
  async function addCart(id:string){try{await api('/cart/items',{method:'POST',body:JSON.stringify({productId:id,quantity:1})});setNotice('Added to your cart.');}catch(e){setNotice(e instanceof Error?e.message:'Sign in to add products to your cart.');}}
